@@ -314,6 +314,19 @@ void RowEncoder::Init(const std::vector<TypeHolder>& column_types, ExecContext* 
           continue;
         }
       }
+      if (is_binary_like(type.owned_type->field(0)->type()->id())) {
+        if (type.id() == Type::LIST) {
+          encoders_[i] =
+              std::make_shared<ListVarLengthChildEncoder<ListType>>(type.GetSharedPtr());
+          continue;
+        }
+        if (type.id() == Type::LARGE_LIST) {
+          encoders_[i] =
+              std::make_shared<ListVarLengthChildEncoder<LargeListType>>
+              (type.GetSharedPtr());
+          continue;
+        }
+      }
     }
 
     // We should not get here

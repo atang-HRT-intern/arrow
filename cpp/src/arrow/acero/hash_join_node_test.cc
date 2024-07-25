@@ -3402,5 +3402,93 @@ INSTANTIATE_TEST_SUITE_P(HashJoin, FixedWidthListJoin,
   ::testing::Values(list(int32()), large_list(int32()),
                     list(int64()), large_list(int64())));
 
+class VarLengthListJoin : public testing::TestWithParam<std::shared_ptr<DataType>> {};
+
+TEST_P(VarLengthListJoin, HashJoinTest) {
+  const bool parallel = false;
+  const bool slow = false;
+
+  auto varLengthColumnJoinTest = [&](std::shared_ptr<DataType> list_type) {
+    auto l_schema = schema({field("l_i32", int32()), field("l_list", list_type)});
+    auto r_schema = schema({field("r_i32", int32()), field("r_list", list_type)});
+
+    std::vector<FieldRef> l_keys{{"l_list"}};
+    std::vector<FieldRef> r_keys{{"r_list"}};
+
+    BatchesWithSchema l_batches = GenerateBatchesFromString(l_schema, {
+      R"([
+        [1, ["aa"]],
+        [3, null],
+        [4, ["bb", null, "c"]],
+        [8, ["", null]],
+        [9, [null, ""]],
+        [11, ["abcdefghjikl", "1234567890"]]
+      ])"
+    });
+    BatchesWithSchema r_batches = GenerateBatchesFromString(r_schema, {
+      R"([
+        [2, ["aa"]],
+        [5, ["bb", null, "c"]],
+        [6, null],
+        [7, ["", null]],
+        [10, ["abcdefghjikl", "1234567890"]]
+      ])"
+    });
+
+    BatchesWithSchema expected;
+    expected.batches = {
+        ExecBatchFromJSON({int32(), list_type, int32(), list_type}, R"([
+      [1, ["aa"], 2, ["aa"]],
+      [4, ["bb", null, "c"], 5, ["bb", null, "c"]],
+      [8, ["", null], 7, ["", null]],
+      [11, ["abcdefghjikl", "1234567890"], 10, ["abcdefghjikl", "1234567890"]]
+    ])")};
+
+    expected.schema = schema({field("l_i32", int32()), field("l_list", list_type),
+                              field("r_i32", int32()), field("r_list", list_type)});
+
+    ListInnerJoinHelper(l_batches, l_keys, r_batches, r_keys, expected, parallel, slow);
+  };
+
+  auto varLengthScalarJoinTest = [&](std::shared_ptr<DataType> list_type) {
+    auto l_schema = schema({field("l_i32", int32()), field("l_list", list_type)});
+    auto r_schema = schema({field("r_i32", int32()), field("r_list", list_type)});
+
+    BatchesWithSchema l_batches, r_batches;
+
+    auto l_batch = ExecBatch::Make({ArrayFromJSON(int32(), R"([1, 2])"),
+                    ScalarFromJSON(list_type, "[\"abcdefgh\", \"\", null]")});
+    auto r_batch = ExecBatch::Make({ArrayFromJSON(int32(), R"([1, 2, 3])"),
+                    ArrayFromJSON(list_type, R"([[], [null], [null, null]])")});
+
+    l_batches.schema = l_schema;
+    l_batches.batches.push_back(l_batch.ValueUnsafe());
+    r_batches.schema = r_schema;
+    r_batches.batches.push_back(r_batch.ValueUnsafe());
+
+    std::vector<FieldRef> l_keys{{"l_i32"}};
+    std::vector<FieldRef> r_keys{{"r_i32"}};
+
+    BatchesWithSchema expected;
+    expected.batches = {
+        ExecBatchFromJSON({int32(), list_type, int32(), list_type}, R"([
+      [1, ["abcdefgh", "", null], 1, []],
+      [2, ["abcdefgh", "", null], 2, [null]]
+    ])")};
+
+    expected.schema = schema({field("l_i32", int32()),
+      field("l_list", list_type), field("r_i32", int32()),
+      field("r_list", list_type)});
+
+    ListInnerJoinHelper(l_batches, l_keys, r_batches, r_keys, expected, parallel, slow);
+  };
+
+  varLengthColumnJoinTest(GetParam());
+  varLengthScalarJoinTest(GetParam());
+}
+
+INSTANTIATE_TEST_SUITE_P(HashJoin, VarLengthListJoin,
+  ::testing::Values(list(utf8()), large_list(utf8())));
+
 }  // namespace acero
 }  // namespace arrow
